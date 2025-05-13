@@ -2,8 +2,10 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import List, Tuple, Set, Optional
 import numpy as np
-from .unit import Unit, UnitType
+from .unit import Unit, UnitType, UnitState
 from .probabilities import ProbabilitySystem, TargetState, DamageType, TankDamageType
+from .events import SimulationEvent, EventQueue
+from .terrain import TerrainSystem, TerrainEffects
 
 class UnitState(Enum):
     ALIVE = "Alive"
@@ -24,6 +26,16 @@ DETECT_DB = {
     UnitType.ARTILLERY:   {"detect_range": 2000, "detectability": 1.5,   "mountain_prob": 0.5},
     UnitType.COMMAND_POST:{"detect_range": 1500, "detectability": 1.0,   "mountain_prob": 0.2},
     UnitType.DRONE:       {"detect_range": 5000, "detectability": 0.0001,"mountain_prob": 0.3},
+}
+
+# 기동 DB Table (유닛 타입별)
+MOVEMENT_SPEED = {
+    UnitType.INFANTRY:     1,
+    UnitType.ANTI_TANK:    1,
+    UnitType.TANK:         5,
+    UnitType.ARTILLERY:    1,
+    UnitType.DRONE:        10,
+    UnitType.COMMAND_POST: 0,
 }
 
 @dataclass
@@ -272,3 +284,77 @@ class CombatSystem:
         else:
             damage_type = self.prob_system.determine_tank_damage(target_state)
             return self.DAMAGE_VALUES['tank'][damage_type] 
+
+    # 기동
+    def maneuver(self,
+                 unit: CombatUnit,
+                 goal: Tuple[float, float],
+                 event_queue: EventQueue,
+                 current_time: float,
+                 terrain: TerrainSystem,
+                 all_units: List[CombatUnit]):
+        """
+        1) Bresenham 경로로 A→B 직선상의 픽셀(path) 생성
+        2) terrain.get_terrain_effects() 로 속도 계수 얻기
+        3) 1픽셀 이동시간 계산 → 누적 시간 t 에 더하기
+        4) 이동 중 detect() 로 적 조우 확인 → 있으면 FIRE 이벤트 예약 후 리턴
+        5) 없으면 MOVE 이벤트 예약
+        """
+        # 1) 시작·목표 좌표 추출
+        sx, sy = map(int, unit.unit.position)
+        gx, gy = map(int, goal)
+
+        # Bresenham 알고리즘: path 계산
+        path = []
+        dx, dy = abs(gx - sx), abs(gy - sy)
+        sx_step = 1 if gx > sx else -1
+        sy_step = 1 if gy > sy else -1
+        err = dx - dy
+        x, y = sx, sy
+        while True:
+            path.append((x, y))
+            if x == gx and y == gy:
+                break
+            e2 = err * 2
+            if e2 > -dy:
+                err -= dy; x += sx_step
+            if e2 <  dx:
+                err += dx; y += sy_step
+
+        # 2) 기본속도 조회
+        base_speed = MOVEMENT_SPEED[unit.unit.unit_type]
+        t = current_time
+
+        # 3~5) path 순회
+        for nx, ny in path:
+            # terrain 효과
+            eff: TerrainEffects = terrain.get_terrain_effects(nx, ny, unit.unit.unit_type.name)
+            speed_mod = eff.movement_speed
+            if base_speed * speed_mod <= 0:
+                continue  # COMMAND_POST 등 고정형은 건너뛰기
+
+            # 3) 이동시간 계산
+            t += 1.0 / (base_speed * speed_mod)
+
+            # 4) 이동 중 적 조우 검사
+            self.detect(unit, all_units, terrain)
+            if unit.target_list:
+                # 바로 FIRE 이벤트 예약
+                fire_evt = SimulationEvent(
+                    time=t,
+                    actor=unit,
+                    action=Action.FIRE.value,
+                    details={"targets": list(unit.target_list)}
+                )
+                event_queue.schedule(fire_evt)
+                return
+
+            # 5) MOVE 이벤트 예약
+            move_evt = SimulationEvent(
+                time=t,
+                actor=unit,
+                action=Action.MANEUVER.value,
+                details={"new_position": (nx, ny)}
+            )
+            event_queue.schedule(move_evt)
+        # 목표 도달 시 종료
