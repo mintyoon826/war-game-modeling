@@ -8,6 +8,7 @@ class Phase(Enum):
     ARMOR_ENGAGEMENT = 2  # 기갑 교전
     CLOSE_COMBAT = 3      # 근접전투
 
+
 @dataclass
 class Command:
 # To do list : 
