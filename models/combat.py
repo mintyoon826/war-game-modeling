@@ -141,6 +141,7 @@ class CombatSystem:
                     continue
                 else:
                     target.failed_detect_count = 0
+            # 상대 유닛 상태. 화력까지 포함된 후에 보완. 완전 파괴되면 target list에서 아예 제외하고 시작 등
             # 5. 상대팀이면 target_list에 추가
             if observer.unit.team != target.unit.team:
                 observer.target_list.add(target.unit)

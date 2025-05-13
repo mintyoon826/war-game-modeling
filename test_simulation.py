@@ -12,7 +12,6 @@ import time
 from matplotlib.image import imread
 import json
 
-
 def load_config(config_path):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
@@ -201,13 +200,12 @@ def run_simulation(cfg):
             new_x = unit.unit.position[0] + np.random.randint(-10, 11)
             new_y = unit.unit.position[1] + np.random.randint(-10, 11)
             
-            # 경계 확인
-            new_x = max(0, min(new_x, img_width - 1))
-            new_y = max(0, min(new_y, img_height - 1))
+            # 경계 체크 및 제한
+            new_x = max(0, min(new_x, terrain_system.dem_width - 1))
+            new_y = max(0, min(new_y, terrain_system.dem_height - 1))
             
-            # 위치 업데이트
-            old_pos = unit.unit.position
             unit.unit.position = (new_x, new_y)
+            unit.action = unit.action.MOVE if hasattr(unit.action, 'MOVE') else 'MOVE'
             
             # 이동 이벤트 로깅
             movement_event = Event(
@@ -216,7 +214,7 @@ def run_simulation(cfg):
                 actor_id=unit.unit.id,
                 action="MOVE",
                 details={
-                    'old_position': old_pos,
+                    'old_position': unit.unit.position,
                     'new_position': (new_x, new_y)
                 }
             )

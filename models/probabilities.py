@@ -24,10 +24,10 @@ class TankDamageType(Enum):
 class ProbabilitySystem:
     def __init__(self):
         # Load probability data
-        self.rifle_hit_prob = pd.read_csv('database/rifle_hit_prob.csv')
-        self.rifle_damage_prob = pd.read_csv('database/rifle_damage_prob.csv')
-        self.tank_hit_prob = pd.read_csv('database/tank_hit_prob.csv')
-        self.tank_damage_prob = pd.read_csv('database/tank_damage_prob.csv')
+        self.rifle_hit_prob = pd.read_csv('database/rifle_at_commander_hit.csv')
+        self.rifle_damage_prob = pd.read_csv('database/rifle_at_commander_kh.csv')
+        self.tank_hit_prob = pd.read_csv('database/tank_artillery_hit.csv')
+        self.tank_damage_prob = pd.read_csv('database/tank_artillery_kh.csv')
     
     def get_hit_probability(self, weapon_type: str, distance: float, target_state: TargetState) -> float:
         """Get hit probability based on weapon type, distance, and target state"""

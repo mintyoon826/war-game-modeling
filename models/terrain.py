@@ -1,7 +1,8 @@
-import rasterio
 import numpy as np
+import pandas as pd
 from typing import Tuple, Optional
 from dataclasses import dataclass
+from PIL import Image
 
 @dataclass
 class TerrainEffects:
@@ -10,12 +11,17 @@ class TerrainEffects:
     kill_prob: float      # Kill probability multiplier
 
 class TerrainSystem:
-    def __init__(self, dem_file: str = "database/36710.img"):
-        # Load DEM data
-        with rasterio.open(dem_file) as src:
-            self.dem_data = src.read(1)
-            self.transform = src.transform
-            self.crs = src.crs
+    def __init__(self, xyz_file: str = "database/xyz_coordinates.csv"):
+        # Load elevation data from xyz_coordinates.csv
+        # 이미 행이 y좌표(0~448), 열이 x좌표(0~748)인 형태로 저장되어 있음
+        self.dem_data = pd.read_csv(xyz_file, header=0, index_col=0).values
+        
+        # Set DEM dimensions based on actual data size
+        self.dem_height, self.dem_width = self.dem_data.shape  # y: 0-448, x: 0-748
+        
+        # Load background image dimensions
+        bg_img = Image.open("results/background.png")
+        self.img_width, self.img_height = bg_img.size
         
         # Terrain thresholds
         self.mountain_threshold = 50.0  # meters
@@ -35,11 +41,13 @@ class TerrainSystem:
             "ARTILLERY": TerrainEffects(0.7, 0.8, 1.0)   # Artillery
         }
     
+
     def get_elevation(self, x: int, y: int) -> float:
         """Get elevation at given coordinates"""
-        if 0 <= y < self.dem_data.shape[0] and 0 <= x < self.dem_data.shape[1]:
-            return self.dem_data[y, x]
-        return 0.0
+        # Ensure coordinates are within bounds
+        x = max(0, min(x, self.dem_width - 1))
+        y = max(0, min(y, self.dem_height - 1))
+        return self.dem_data[y, x]
     
     def get_terrain_effects(self, x: int, y: int, unit_type: str) -> TerrainEffects:
         """Get terrain effects for a unit at given coordinates"""

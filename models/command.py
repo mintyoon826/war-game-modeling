@@ -10,6 +10,9 @@ class Phase(Enum):
 
 @dataclass
 class Command:
+# To do list : 
+# 1. Maneuver objective : For red team If none, the maneuver objective is the current position of each unit.
+# 2. tir : when dimension is not 1 (2개인 경우 까다로움)
     phase: Phase
     team: str  # "RED" or "BLUE"
     tir: Tuple[float, float]  # Drone reconnaissance area
@@ -18,35 +21,64 @@ class Command:
     
     @classmethod
     def create_phase_1_command(cls, team: str):
-        return cls(
-            phase=Phase.FIRE_SUPPRESSION,
-            team=team,
-            tir=(0, 0),  # TODO: Set actual coordinates
-            fire_priority=[1, 2, 3, 4, 5],  # Artillery > Command > Armor > Anti-tank > Infantry
-            maneuver_objective=(0, 0)  # TODO: Set actual coordinates
-        )
+        if team == "RED":
+            return cls(
+                phase=Phase.FIRE_SUPPRESSION,
+                team=team,
+                tir=(600, 200),  # Red team's reconnaissance area
+                fire_priority=[1, 2, 3, 4, 5],  # Artillery > Command > Armor > Anti-tank > Infantry
+                maneuver_objective=(450, 280)  # Red team's objective
+            )
+        else:  # BLUE team
+            return cls(
+                phase=Phase.FIRE_SUPPRESSION,
+                team=team,
+                tir=(50, 350),  # Blue team's reconnaissance area
+                fire_priority=[1, 2, 3, 4, 5],  # Artillery > Command > Armor > Anti-tank > Infantry
+                maneuver_objective=(590, 250)  # Blue team's objective
+            )
     
     @classmethod
     def create_phase_2_command(cls, team: str):
-        return cls(
-            phase=Phase.ARMOR_ENGAGEMENT,
-            team=team,
-            tir=(0, 0),  # TODO: Set actual coordinates
-            fire_priority=[3, 2, 1, 4, 5],  # Armor > Command > Artillery > Anti-tank > Infantry
-            maneuver_objective=(0, 0)  # TODO: Set actual coordinates
-        )
+        if team == "RED":
+            return cls(
+                phase=Phase.ARMOR_ENGAGEMENT,
+                team=team,
+                tir=(550, 200),  # Red team's reconnaissance area
+                fire_priority=[3, 2, 1, 4, 5],  # Armor > Command > Artillery > Anti-tank > Infantry
+                maneuver_objective=(450, 280)  # Red team's objective
+            )
+        else:  # BLUE team
+            return cls(
+                phase=Phase.ARMOR_ENGAGEMENT,
+                team=team,
+                tir=(350, 300),  # Blue team's reconnaissance area
+                fire_priority=[3, 2, 1, 4, 5],  # Armor > Command > Artillery > Anti-tank > Infantry
+                maneuver_objective=(450, 250)  # Blue team's objective
+            )
     
     @classmethod
     def create_phase_3_command(cls, team: str):
-        return cls(
-            phase=Phase.CLOSE_COMBAT,
-            team=team,
-            tir=(0, 0),  # TODO: Set actual coordinates
-            fire_priority=[3, 2, 4, 5, 1],  # Armor > Command > Anti-tank > Infantry > Artillery
-            maneuver_objective=(0, 0)  # TODO: Set actual coordinates
-        )
+        if team == "RED":
+            return cls(
+                phase=Phase.CLOSE_COMBAT,
+                team=team,
+                tir=(450, 250),  # Red team's reconnaissance area
+                fire_priority=[3, 4, 2, 5, 1],  # Armor > Anti-tank > Command > Infantry > Artillery
+                maneuver_objective=(450, 280)  # Red team's objective
+            )
+        else:  # BLUE team
+            return cls(
+                phase=Phase.CLOSE_COMBAT,
+                team=team,
+                tir=(350, 300),  # Blue team's reconnaissance area
+                fire_priority=[3, 4, 2, 5, 1],  # Armor > Anti-tank > Command > Infantry > Artillery
+                maneuver_objective=(350, 300)  # Blue team's objective
+            )
 
 class CommandSystem:
+# To do list : 
+# 1. 검토 필요 ()
     def __init__(self):
         self.red_command: Command = None
         self.blue_command: Command = None

@@ -44,12 +44,24 @@ class SimulationVisualizer:
             self.output_dir = config['output_dir']
         else:
             self.output_dir = os.path.dirname(self.bg_path)
+            
+        # DEM dimensions
+        self.dem_width = 750  # x: 0-749
+        self.dem_height = 450  # y: 0-449
+
+    def _scale_coordinates(self, x: float, y: float) -> tuple:
+        """Scale DEM coordinates to image coordinates"""
+        scaled_x = (x / self.dem_width) * self.img_width
+        scaled_y = (y / self.dem_height) * self.img_height
+        return scaled_x, scaled_y
 
     def create_map_visualization(self, units: List[Dict], timestamp: float, output_file: str = None):
         plt.figure(figsize=(16, 9))
         plt.imshow(self.bg_img)
         for unit in units:
             x, y = unit['position']
+            # Scale coordinates
+            x, y = self._scale_coordinates(x, y)
             color = 'red' if unit['team'] == 'RED' else 'blue'
             marker = self._get_marker(unit['type'])
 
@@ -178,6 +190,8 @@ class SimulationVisualizer:
 
             for unit in snapshot.units:
                 x, y = unit['position']
+                # Scale coordinates
+                x, y = self._scale_coordinates(x, y)
                 unit_type = unit['type']
                 team = unit['team']
                 marker = marker_map.get(unit_type, 'o')
