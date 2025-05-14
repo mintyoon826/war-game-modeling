@@ -6,6 +6,7 @@ from .unit import Unit, UnitType, UnitState
 from .probabilities import ProbabilitySystem, TargetState, DamageType, TankDamageType
 from .events import SimulationEvent, EventQueue
 from .terrain import TerrainSystem, TerrainEffects
+import math
 
 class UnitState(Enum):
     ALIVE = "Alive"
@@ -100,6 +101,8 @@ class CombatSystem:
             TankDamageType.COMPLETE: 100
         }
     }
+    # 곡사 포탄의 치사 반경 (m)
+    ARTILLERY_LETHAL_RADIUS = 35.0
 
     def __init__(self, probability_system: Optional[ProbabilitySystem] = None):
         self.prob_system = probability_system or ProbabilitySystem()
@@ -171,7 +174,7 @@ class CombatSystem:
             return target.unit_type in [UnitType.TANK, UnitType.INFANTRY]
         return True
 
-    def finding_target(self, unit: CombatUnit):
+    def finding_target(self, unit: CombatUnit, event_queue: EventQueue, current_time: float):
         """공격 가능한 타겟 선정 및 사격 이벤트 예약"""
         if unit.state in [UnitState.ALIVE, UnitState.M_KILL] and unit.action == Action.STOP:
             if unit.eligible_target_list:
@@ -189,12 +192,12 @@ class CombatSystem:
         else:
             return self._select_direct_fire_target(unit)
 
-    def _select_artillery_target(self, unit: CombatUnit) -> Unit:
+    def _select_artillery_target(self, unit: CombatUnit) -> CombatUnit:
         """곡사화기(포병)용 타겟 선정 (우선순위/아군 피해 고려 가능)"""
         # TODO: 우선순위/아군 피해 고려 구현
         return next(iter(unit.eligible_target_list))
 
-    def _select_direct_fire_target(self, unit: CombatUnit) -> Unit:
+    def _select_direct_fire_target(self, unit: CombatUnit) -> CombatUnit:
         """직사화기(직접 조준) 무기용 타겟 선정 (가장 가까운 적)"""
         return min(unit.eligible_target_list, key=lambda t: self._calculate_distance(unit.unit.position, t.position))
 
@@ -203,12 +206,20 @@ class CombatSystem:
         """두 위치(픽셀 좌표) 간 유클리드 거리 계산"""
         return np.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
 
-    def _schedule_fire(self, unit: CombatUnit, target: Unit):
+    def schedule_fire(self, unit: CombatUnit, target: CombatUnit, event_queue: EventQueue, current_time: float):
         """FEL(이벤트 큐)에 사격 이벤트 예약 (확장 가능)"""
-        # TODO: 실제 이벤트 큐 구현
-        pass
+        dist = self._calculate_distance(unit.unit.position, target.unit.position)
+        flight_time = dist / self.shell_speed # 수정 필요
+        evt = SimulationEvent(
+            time=current_time + flight_time,
+            actor=unit,
+            action="Fire",
+            details={"targets": [target]}
+        )
+        event_queue.schedule(evt)
 
-    def fire(self, unit: CombatUnit, target: Unit):
+
+    def fire(self, unit: CombatUnit, target: CombatUnit):
         """사격 이벤트 실행 (직사/곡사 구분)"""
         if target not in unit.eligible_target_list:
             return
@@ -218,11 +229,48 @@ class CombatSystem:
             self._direct_fire(unit, target)
         unit.action = Action.STOP
 
-    def _artillery_fire(self, unit: CombatUnit, target: Unit):
-        """곡사화기 사격 (추후 구현)"""
-        pass
+    def _artillery_fire(self, unit: CombatUnit, target: CombatUnit, event_queue: EventQueue, currrent_time: float):
+        """곡사화기 사격"""
+        # [1] 최대 사거리 4700m 체크
+        d_pix = self._calculate_distance(unit.unit.position, target.unit.position)
+        d     = d_pix * self.distance_rescale
+        if d > 4700.0:
+            return
+        # [2] 산탄 오차 σ 계산
+        sigma_range   = 0.02 * d
+        sigma_deflect = 0.01 * d
+        # [3] 오차 샘플링
+        dx = np.random.normal(0, sigma_range)
+        dy = np.random.normal(0, sigma_deflect)
+        # [4] 탄착 지점 계산
+        x_aim, y_aim = target.unit.position
+        impact_x = x_aim + dx
+        impact_y = y_aim + dy
+        # [5] 탄착–표적 간 거리 r 계산
+        r_pix = self._calculate_distance((impact_x, impact_y), (x_aim, y_aim))
+        r = r_pix * self.distance_rescale
+        # [6] 치사 반경
+        R_L = self.ARTILLERY_LETHAL_RADIUS
+        # [7] 피해 확률 D(r)
+        p_damage = math.exp(- (r ** 2) / (2 * (R_L ** 2)))
+        # [8] 명중 판단
+        if np.random.random() > p_damage:
+            return
+        # [9],[10] 피해 타입 결정 및 상태 업데이트
+        dmg_type = self.prob_system.determine_tank_damage(
+            target.get_target_state()
+        )
+        if dmg_type == TankDamageType.COMPLETE:
+            target.state = UnitState.K_KILL
+        elif dmg_type == TankDamageType.FIREPOWER:
+            target.state = UnitState.F_KILL
+        elif dmg_type == TankDamageType.MOBILITY:
+            target.state = UnitState.M_KILL
+         # [11] 재장전 타이머 정규분포 -> 구체적으로 어떻게?
 
-    def _direct_fire(self, unit: CombatUnit, target: Unit):
+
+
+    def _direct_fire(self, unit: CombatUnit, target: CombatUnit):
         """직사화기 사격 및 피해 처리"""
         distance = self._calculate_distance(unit.unit.position, target.position)
         weapon_type = "rifle" if unit.unit.unit_type == UnitType.INFANTRY else "tank"
@@ -237,7 +285,7 @@ class CombatSystem:
             else:
                 self._process_tank_damage(unit, target)
 
-    def _process_rifle_damage(self, unit: CombatUnit, target: Unit, distance: float):
+    def _process_rifle_damage(self, unit: CombatUnit, target: CombatUnit, distance: float):
         """소총류 피해 처리 (피해 타입별로 상태 변경)"""
         damage_type = self.prob_system.determine_rifle_damage(
             distance,
@@ -250,7 +298,7 @@ class CombatSystem:
         elif damage_type == DamageType.SERIOUS:
             target.state = UnitState.M_KILL
 
-    def _process_tank_damage(self, unit: CombatUnit, target: Unit):
+    def _process_tank_damage(self, unit: CombatUnit, target: CombatUnit):
         """전차류 피해 처리 (피해 타입별로 상태 변경)"""
         damage_type = self.prob_system.determine_tank_damage(
             target.get_target_state()
@@ -347,7 +395,7 @@ class CombatSystem:
                     details={"targets": list(unit.target_list)}
                 )
                 event_queue.schedule(fire_evt)
-                return
+                return # 남은 이동 경로는 모두 취소
 
             # 5) MOVE 이벤트 예약
             move_evt = SimulationEvent(

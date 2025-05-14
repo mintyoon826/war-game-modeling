@@ -2,7 +2,7 @@ import numpy as np
 import os
 import yaml
 from models.terrain import TerrainSystem
-from models.combat import CombatSystem, CombatUnit
+from models.combat import CombatSystem, CombatUnit, UnitState, Action
 from models.probabilities import ProbabilitySystem
 from models.events import EventQueue, SimulationEvent
 from models.logging import SimulationLogger, Event, StateSnapshot
@@ -79,6 +79,7 @@ def run_simulation(cfg):
     terrain_system = TerrainSystem()
     probability_system = ProbabilitySystem()
     combat_system = CombatSystem(probability_system)
+    command_system = CommandSystem()
     if 'distance_rescale' in cfg:
         combat_system.set_distance_rescale(cfg['distance_rescale'])
     event_queue = EventQueue()
@@ -97,6 +98,56 @@ def run_simulation(cfg):
     
     # 시뮬레이션 루프
     while current_time < max_time:
+        # ── 예약된 MOVE/FIRE 이벤트 처리 ────────────────────────────
+        while event_queue.peek_next_time() is not None and event_queue.peek_next_time() <= current_time:
+            evt = event_queue.get_next_event()
+            if evt.action == "Maneuver":
+                new_pos = evt.details["new_position"]
+                evt.actor.unit.move_to(new_pos)
+                evt.actor.action = Action.MANEUVER
+                logger.log_event(Event(
+                    timestamp=current_time,
+                    event_type="MOVEMENT",
+                    actor_id=evt.actor.unit.id,
+                    action="MOVE",
+                    details={"new_position": new_pos}
+                ))
+
+            elif evt.action == "Fire":
+                # 1) 화력 실행
+                for tgt in evt.details["targets"]:
+                    combat_system.fire(evt.actor, tgt)
+                evt.actor.action = Action.FIRE
+                # 전투 로그
+                for tgt in evt.details["targets"]:
+                    logger.log_event(Event(
+                        timestamp=current_time,
+                        event_type="COMBAT",
+                        actor_id=evt.actor.unit.id,
+                        action="FIRE",
+                        target_id=tgt.unit.id,
+                        details={
+                            "hit": tgt.state in (UnitState.M_KILL, UnitState.F_KILL, UnitState.K_KILL),
+                            "resulting_state": tgt.state.value
+                        }
+                    ))
+                # 2) 교전 후 상태에 따른 분류: 기동 정지 혹은 경로 탐색
+                st = evt.actor.state
+                if st in [UnitState.ALIVE, UnitState.F_KILL]:
+                    # 살아 있거나 화력만 파괴된 경우: 기존 목표로 기동 재예약
+                    combat_system.maneuver(
+                        unit=evt.actor,
+                        goal=evt.actor.current_goal,
+                        event_queue=event_queue,
+                        current_time=current_time,
+                        terrain=terrain_system,
+                        all_units=units
+                    )
+                else:
+                    # 기동 불능(M_KILL) 또는 완파(K_KILL): 더 이상 이동하지 않도록 목표 초기화
+                    evt.actor.current_goal = None
+
+
         # 현재 상태 스냅샷 저장
         state_snapshot = StateSnapshot(
             timestamp=current_time,
@@ -115,110 +166,51 @@ def run_simulation(cfg):
             combat_state={'timestamp': current_time}
         )
         logger.log_state(state_snapshot)
+
+        # 액션 리셋
+        for u in units:
+            if u.action in (Action.FIRE, Action.MANEUVER):
+                u.action = Action.STOP
         
+        # 페이즈 전환 평가 -> phase 전환 조건을 만족했는지 확인
+        # 검토 필요
+        if command_system.evaluate_dc("RED"):
+            command_system.transition_phase("RED")
+        if command_system.evaluate_dc("BLUE"):
+            command_system.transition_phase("BLUE")
+
+
         # === 탐지 로직 적용 ===
+        # 탐지 및 화력 예약 -> 코드 수정
+        # 정지 상태(ES)에서 적을 감지하면 곧바로 Fire 이벤트(FEL)에 예약 -> 맞는지?
         for unit in units:
             if not unit.unit.is_alive():
                 continue
             combat_system.detect(unit, units, terrain_system)
+            combat_system.available_target(unit)
+            combat_system.finding_target(unit, event_queue, current_time)
         
-        # 전투 처리
-        attack_results = []
-        for unit in units:
-            if not unit.unit.is_alive():
-                continue
-                
-            # 탐지된 적 유닛만 대상으로 전투
-            enemies = [u for u in units if u.unit in unit.target_list and u.unit.team != unit.unit.team and u.unit.is_alive()]
-            if not enemies:
-                continue
-                
-            # 가장 가까운 적 찾기
-            closest_enemy = min(enemies, key=lambda e: combat_system._calculate_distance(unit.unit.position, e.unit.position))
-            
-            # 사거리와 시야 확인
-            if combat_system.is_in_range(unit, closest_enemy) and terrain_system.check_line_of_sight(unit.unit.position, closest_enemy.unit.position):
-                # 명중 확률 계산 및 공격
-                hit_prob = combat_system.calculate_hit_probability(unit, closest_enemy)
-                unit.action = unit.action.FIRE if hasattr(unit.action, 'FIRE') else 'FIRE'
-                
-                if np.random.random() < hit_prob:
-                    damage = combat_system.process_damage(unit, closest_enemy)
-                    attack_results.append((closest_enemy, damage))
-                    
-                    # 전투 이벤트 로깅
-                    combat_event = Event(
-                        timestamp=current_time,
-                        event_type="COMBAT",
-                        actor_id=unit.unit.id,
-                        action="FIRE",
-                        target_id=closest_enemy.unit.id,
-                        details={
-                            'hit': True,
-                            'damage': damage,
-                            'hit_probability': hit_prob
-                        }
-                    )
-                    logger.log_event(combat_event)
-                    print(f"Time {current_time:.1f}: {unit.unit.id} HIT {closest_enemy.unit.id} for {damage} damage (p={hit_prob:.2f})")
-                    logger2.write(f"Time {current_time:.1f}: {unit.unit.id} HIT {closest_enemy.unit.id} for {damage} damage (p={hit_prob:.2f})\n")
-                else:
-                    # 빗나감 이벤트 로깅
-                    combat_event = Event(
-                        timestamp=current_time,
-                        event_type="COMBAT",
-                        actor_id=unit.unit.id,
-                        action="FIRE",
-                        target_id=closest_enemy.unit.id,
-                        details={
-                            'hit': False,
-                            'damage': 0,
-                            'hit_probability': hit_prob
-                        }
-                    )
-                    logger.log_event(combat_event)
-                    print(f"Time {current_time:.1f}: {unit.unit.id} MISS {closest_enemy.unit.id} (p={hit_prob:.2f})")
-                    logger2.write(f"Time {current_time:.1f}: {unit.unit.id} MISS {closest_enemy.unit.id} (p={hit_prob:.2f})\n")
-
-        # 공격 결과 적용
-        for target, damage in attack_results:
-            target.unit.take_damage(damage)
-            if not target.unit.is_alive():
-                target.state = target.state.K_KILL if hasattr(target.state, 'K_KILL') else 'K_KILL'
         
-        # 유닛 상태 업데이트
-        for unit in units:
-            if unit.action == (unit.action.FIRE if hasattr(unit.action, 'FIRE') else 'FIRE'):
-                unit.action = unit.action.STOP if hasattr(unit.action, 'STOP') else 'STOP'
         
-        # 이동 처리
+        # ── 기동 명령 예약 ───────────────────────────────────
         for unit in units:
             if not unit.unit.is_alive() or unit.unit.unit_type == UnitType.COMMAND_POST:
                 continue
-                
-            # 랜덤 이동
-            new_x = unit.unit.position[0] + np.random.randint(-10, 11)
-            new_y = unit.unit.position[1] + np.random.randint(-10, 11)
-            
-            # 경계 체크 및 제한
-            new_x = max(0, min(new_x, terrain_system.dem_width - 1))
-            new_y = max(0, min(new_y, terrain_system.dem_height - 1))
-            
-            unit.unit.position = (new_x, new_y)
-            unit.action = unit.action.MOVE if hasattr(unit.action, 'MOVE') else 'MOVE'
-            
-            # 이동 이벤트 로깅
-            movement_event = Event(
-                timestamp=current_time,
-                event_type="MOVEMENT",
-                actor_id=unit.unit.id,
-                action="MOVE",
-                details={
-                    'old_position': unit.unit.position,
-                    'new_position': (new_x, new_y)
-                }
+
+            # 페이즈별 목표 가져오기
+            goal = (command_system.red_command if unit.unit.team == "RED"
+                    else command_system.blue_command).maneuver_objective
+
+            unit.current_goal = goal
+            combat_system.maneuver(
+                unit=unit,
+                goal=goal,
+                event_queue=event_queue,
+                current_time=current_time,
+                terrain=terrain_system,
+                all_units=units
             )
-            logger.log_event(movement_event)
+        
         
         # 시간 업데이트
         current_time += time_step
