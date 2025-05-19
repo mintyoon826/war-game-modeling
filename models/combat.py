@@ -171,10 +171,6 @@ class CombatSystem:
 # 화력
     def _is_valid_target(self, attacker: Unit, target: Unit) -> bool:
         """공격자의 무기 특성에 따라 유효 타겟인지 판정 -> 무기 특성 필터링"""
-        # Anti-tank → Tank 만 사격 가능
-        if attacker.unit_type == UnitType.ANTI_TANK:
-            return target.unit_type == UnitType.TANK
-
         # Infantry(Rifle) → Tank, Artillery 사격 불가
         if attacker.unit_type == UnitType.INFANTRY:
             return target.unit_type not in [UnitType.TANK, UnitType.ARTILLERY]
@@ -280,7 +276,7 @@ class CombatSystem:
         for tgt in candidates:
             priority_score = type_priority.get(tgt.unit_type, max(type_priority.values()) + 1)
             ff_score = friendly_fire_scores[tgt]
-            scores[tgt] = 0.5 * priority_score - 0.5 * ff_score
+            scores[tgt] = 0.8 * priority_score - 0.2 * ff_score
         # 5) 스코어가 가장 낮은(=가장 우선) 목표 반환
         best_target = min(scores, key=scores.get)  
         return best_target
@@ -358,6 +354,8 @@ class CombatSystem:
         self._process_tank_damage(unit, target)
 
         # [10] 무력화 판단
+        '''무력화 된 후에 다른 target 경우 - 다시 Main loop 로직 돌기
+        무력화 안 된 경우만 재장전 후 바로 재사격'''
         incapacitated = (dmg_type in (TankDamageType.TURRET, TankDamageType.COMPLETE))
         if incapacitated:
             others = [t for t in unit.eligible_target_list if t is not target]
@@ -427,7 +425,7 @@ class CombatSystem:
             return
 
         # [3]~[5] 난수로 피해 판정 수행
-        # FATAL, K-KILL도 무력화 아닌지?
+        # FATAL, K-KILL도 무력화
         if weapon_type == "rifle":
             dmg_type = self.prob_system.determine_rifle_damage(distance, target.get_target_state())
             self._process_rifle_damage(unit, target, distance)
@@ -438,7 +436,8 @@ class CombatSystem:
             incapacitated = (dmg_type in (TankDamageType.TURRET, TankDamageType.COMPLETE))
         
         # [6] 무력화 판단
-        # 무력화 된 후에 다른 target 잡아서 사격? 기동만 할지 사격할 지 다시 정해야하는 것 아닌지.
+        '''무력화 된 후에 다른 target 경우 - 다시 Main loop 로직 돌기
+        무력화 안 된 경우만 재장전 후 바로 재사격'''
         remaining = [t for t in unit.eligible_target_list if t is not target]
         if incapacitated and remaining:
             # 남은 후보 중 가장 가까운 적
