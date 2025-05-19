@@ -8,9 +8,11 @@ from models.events import EventQueue, SimulationEvent
 from models.logging import SimulationLogger, Event, StateSnapshot
 from models.visualization import SimulationVisualizer
 from models.unit import Unit, UnitType
+from models.command import Command, Phase, CommandSystem
 import time
 from matplotlib.image import imread
 import json
+
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -78,8 +80,11 @@ def run_simulation(cfg):
     os.makedirs(cfg['output_dir'], exist_ok=True)
     terrain_system = TerrainSystem()
     probability_system = ProbabilitySystem()
-    combat_system = CombatSystem(probability_system)
     command_system = CommandSystem()
+    combat_system     = CombatSystem(
+        command_system=command_system,
+        probability_system=probability_system
+    )
     if 'distance_rescale' in cfg:
         combat_system.set_distance_rescale(cfg['distance_rescale'])
     event_queue = EventQueue()
@@ -87,6 +92,7 @@ def run_simulation(cfg):
     logger2 = open(os.path.join(cfg['output_dir'], "log.txt"), "w") # 전투 기록만 표시하는 로거
     visualizer = SimulationVisualizer(config=cfg)
     units = create_test_units(cfg)
+    combat_system._all_units = units
     current_time = 0.0
     time_step = 1.0
     max_time = cfg['max_time']
@@ -116,7 +122,7 @@ def run_simulation(cfg):
             elif evt.action == "Fire":
                 # 1) 화력 실행
                 for tgt in evt.details["targets"]:
-                    combat_system.fire(evt.actor, tgt)
+                    combat_system.fire(evt.actor, tgt, event_queue, current_time)
                 evt.actor.action = Action.FIRE
                 # 전투 로그
                 for tgt in evt.details["targets"]:
@@ -178,11 +184,23 @@ def run_simulation(cfg):
             command_system.transition_phase("RED")
         if command_system.evaluate_dc("BLUE"):
             command_system.transition_phase("BLUE")
+        
+        # ── 지휘소 파괴 시 페이즈 3 목표 강제 설정 ────────────────────────────
+        for team in ("RED", "BLUE"):
+            cp = next((
+                u for u in units
+                if u.unit.unit_type == UnitType.COMMAND_POST and u.unit.team == team
+            ), None)
+            if cp and not cp.unit.is_alive():
+                if team == "RED":
+                    command_system.red_command = Command.create_phase_3_command("RED")
+                else:
+                    command_system.blue_command = Command.create_phase_3_command("BLUE")
 
 
         # === 탐지 로직 적용 ===
         # 탐지 및 화력 예약 -> 코드 수정
-        # 정지 상태(ES)에서 적을 감지하면 곧바로 Fire 이벤트(FEL)에 예약 -> 맞는지?
+        # 정지 상태(ES)에서 적을 감지하면 곧바로 Fire 이벤트(FEL)에 예약 -> combat.py에 넣을 지 여기에 그대로 둘 지는 화력 스케쥴 마저 코딩하고 결정.
         for unit in units:
             if not unit.unit.is_alive():
                 continue

@@ -25,7 +25,7 @@ class TerrainSystem:
         
         # Terrain thresholds
         self.mountain_threshold = 50.0  # meters
-        self.water_threshold = 40.0     # meters
+        self.water_threshold = 39.0     # meters
         
         # Terrain effect weights
         self.decay_weight_mount = 0.5   # Mountain effect weight
